@@ -92,8 +92,11 @@ eis_y=windata.solar_y+xy[1]+offset[1]
 s=size(map[0].data,/dim)
 
 ;
-; Define size of the simulated EIS image. Note that the y-size
-; does not match the EIS y-size at this point, but x does.
+; img is used to help create the synthetic EIS image. The x-size
+; is set to the EIS map x-size. For the y-direction, we initially
+; set this to the size of the AIA image in arcsec. For example,
+; if the AIA image is 200 pixels, then we get the y-size as 120
+; pixels (200*0.6).
 ;
 img=fltarr(nx,round(s[1]*map[0].dx))
 
@@ -131,7 +134,7 @@ FOR i=0,nx-1 DO BEGIN
     count=0
     FOR j=0,nk-1 DO BEGIN
      ;
-     ; Rebin the map to EIS pixel sizes
+     ; Rebin the AIA map to the EIS y-pixel size (1 arcsec)
      ;
       s=size(map[k[j]].data,/dim)
       r_ny=round(s[1]*map[k[j]].dy)
