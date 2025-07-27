@@ -1,7 +1,9 @@
 
 function sdo2map, filename, clean=clean, nonorm=nonorm, no_sat=no_sat, $
                   no_rot=no_rot, trange=trange, tmatch=tmatch, $
-                  no_shared_lib=no_shared_lib, quiet=quiet
+                  no_shared_lib=no_shared_lib, quiet=quiet, $
+                  no_pointing_check=no_pointing_check, $
+                  nsatpix=nsatpix
 
 ;+
 ; NAME:
@@ -36,6 +38,11 @@ function sdo2map, filename, clean=clean, nonorm=nonorm, no_sat=no_sat, $
 ;     Trange:   A 2-element string array specifying a time range for
 ;               which images are needed.
 ;
+;     Nsatpix:  If /no_sat is set, then this controls the threshold
+;               at which an image is considered saturated. The file
+;               header contains the keyword nsatpix that gives the
+;               number of saturated pixels. The default value is 500.
+;
 ; KEYW0RDS:
 ;     CLEAN:  If set, then the routine 'AIA CLEAN_CUTOUT_SEQUENCE' is
 ;             used to remove cosmic rays. It is intended that this be
@@ -52,6 +59,12 @@ function sdo2map, filename, clean=clean, nonorm=nonorm, no_sat=no_sat, $
 ;             the ROT_MAP routine. If /no_rot is given then the
 ;             correction is not done.
 ;     QUIET:  If set, then information messages are not printed.
+;
+;     NO_POINTING_CHECK: By default, the routine checks if the files'
+;             pointing information is up-to-date. If not, then a
+;             message is printed and you should re-download the file to
+;             get the best pointing data. Setting this keyword stops
+;             the pointing being checked.
 ;
 ; OUTPUTS:
 ;     An IDL map containing the data from FILENAME. If FILENAME is an
@@ -103,27 +116,61 @@ function sdo2map, filename, clean=clean, nonorm=nonorm, no_sat=no_sat, $
 ;     Ver.14, 21-Jul-2022, Peter Young
 ;        Added /quiet in call to aia_clean_cutout_sequence; added /quiet
 ;        keyword.
+;     Ver.15, 04-Dec-2024, Peter Young
+;        Added /no_pointing_check keyword.
+;     Ver.16, 25-Jul-2025, Peter Young
+;        Modified how saturated images are dealt with, and introduced
+;        nsatpix= input.
 ;-
 
 
 IF n_params() LT 1 THEN BEGIN
   print,'Use:  map=sdo2map( filename [, /clean, /nonorm, /no_sat, /no_rot, trange=, '
-  print,'                   tmatch=, /no_shared_lib, /quiet ])'
+  print,'                   tmatch=, /no_shared_lib, /quiet, /no_pointing_check, '
+  print,'                   nsatpix= ])'
   return,-1
 ENDIF 
 
 
 list=file_search(filename,count=n)
 IF list[0] EQ '' THEN BEGIN
-  print,'%SDO2MAP:  FILENAME not found. Returning...'
+  message,/info,/cont,'FILENAME not found. Returning...'
   return,-1
 ENDIF 
+
+;
+; An image is considered saturated if it has more than nsatpix saturated pixels.
+; The image header contains the number of saturated pixels.
+;
+IF keyword_set(no_sat) THEN BEGIN 
+  IF n_elements(nsatpix) EQ 0 THEN nsatpix=500
+ENDIF ELSE BEGIN
+  nsatpix=0
+ENDELSE
 
 ;
 ; Read only the index initially in order to do some filtering.
 ;
 read_sdo,list,index
 
+;
+; Filter out saturated images if /no_sat set.
+;
+IF nsatpix GT 0 THEN BEGIN
+  k=where(index.nsatpix LT nsatpix,nk)
+  IF nk EQ 0 THEN BEGIN
+    message,/info,/cont,'All images are saturated! Try switching off /no_sat, or change the saturation threshold with nsatpix=. The current value is '+trim(round(nsatpix))+'. Returning...'
+    return,-1
+  ENDIF
+  ;
+  IF nk LT n THEN BEGIN
+    IF NOT keyword_set(quiet) THEN message,/info,/cont,'Number of images removed due to saturation: '+ $
+                                           trim(n-nk)+'.'
+    list=list[k]
+    index=index[k]
+    n=nk
+  ENDIF 
+ENDIF 
 
 ;
 ; Do a check for the master pointing. The aia2wcsmin is not
@@ -140,7 +187,7 @@ read_sdo,list,index
 ;
 inst=strmid(index[0].instrume,0,3)
 net_chck=have_network()
-IF inst EQ 'AIA' AND net_chck EQ 1 THEN BEGIN 
+IF inst EQ 'AIA' AND net_chck EQ 1 AND NOT keyword_set(no_pointing_check) THEN BEGIN 
   chckindex=aia2wcsmin(index[0])
   IF NOT keyword_set(quiet) THEN print,'  Current MPO: ',index[0].mpo_rec
   IF NOT keyword_set(quiet) THEN print,'  Latest MPO:  ',chckindex.mpo_rec
@@ -245,7 +292,7 @@ n=n_elements(list)
 ; 1-yes) and removes them from the sequence if /no_sat is set. (Only
 ; for AIA.)
 ;
-bad_sat=bytarr(n)
+;bad_sat=bytarr(n)
 
 ;
 ; Scale the intensity array by the exposure time, but only for AIA
@@ -266,10 +313,10 @@ IF inst EQ 'aia' THEN BEGIN
  ;
   FOR i=0,n-1 DO BEGIN
    ;
-    IF keyword_set(no_sat) THEN BEGIN
-      k_sat=where(map[i].data GE 16000,n_sat)
-      IF n_sat GE 100 THEN bad_sat[i]=1b
-    ENDIF 
+    ;; IF keyword_set(no_sat) THEN BEGIN
+    ;;   k_sat=where(map[i].data GE 16000,n_sat)
+    ;;   IF n_sat GE 100 THEN bad_sat[i]=1b
+    ;; ENDIF 
    ;
     IF keyword_set(nonorm) THEN BEGIN
       map[i].data=map[i].data
@@ -332,14 +379,14 @@ ENDIF ELSE BEGIN
   ENDFOR 
 ENDELSE 
 
-IF keyword_set(no_sat) THEN BEGIN
-  k=where(bad_sat EQ 0,nk)
-  IF nk NE 0 THEN BEGIN 
-    map=map[k]
-    index=index[k]
-    IF NOT keyword_set(quiet) THEN print,'% SDO2MAP:  removed '+trim(nk)+' images that have bad saturation.'
-  ENDIF 
-ENDIF 
+;; IF keyword_set(no_sat) THEN BEGIN
+;;   k=where(bad_sat EQ 0,nk)
+;;   IF nk NE 0 THEN BEGIN 
+;;     map=map[k]
+;;     index=index[k]
+;;     IF NOT keyword_set(quiet) THEN print,'% SDO2MAP:  removed '+trim(nk)+' images that have bad saturation.'
+;;   ENDIF 
+;; ENDIF 
 
 
 map.time=index.t_obs

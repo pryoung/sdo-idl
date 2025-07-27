@@ -39,6 +39,8 @@ FUNCTION aia_make_eis_raster, files, windata, no_sat=no_sat, offset=offset, $
 ;     NO_SAT:  Removes saturated images from the AIA sequence.
 ;     CLEAN:   Cleans the AIA images of cosmic rays (useful for "respiked"
 ;              AIA data).
+;     VERBOSE: If set, then information about how many AIA images
+;              contribute to each exposure is printed to the IDL window.
 ;
 ; CALLS:
 ;     SDO2MAP, EIS_MAKE_IMAGE, EIS_FIND_FILE, EIS_AIA_OFFSETS
@@ -53,6 +55,9 @@ FUNCTION aia_make_eis_raster, files, windata, no_sat=no_sat, offset=offset, $
 ;
 ; MODIFICATION HISTORY:
 ;     Ver.1, 27-Jan-2023, Peter Young
+;     Ver.2, 25-Jul-2025, Peter Young
+;       Fixed bug when the top of the EIS slit extends beyond the top of the
+;       AIA image
 ;-
 
 
@@ -189,8 +194,8 @@ s=size(img,/dim)
 IF s[1]-iy GE ny THEN BEGIN
   outmap.data=img[*,iy:iy+ny-1]
 ENDIF ELSE BEGIN
+  outmap.data[*,0:s[1]-iy-1]=img[*,iy:*]
 ENDELSE
-
 
 outmap.id='AIA raster'
 
