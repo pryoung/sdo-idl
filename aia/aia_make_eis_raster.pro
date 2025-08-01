@@ -1,6 +1,7 @@
 
 FUNCTION aia_make_eis_raster, files, windata, no_sat=no_sat, offset=offset, $
-                              clean=clean, eis_map=eis_map, verbose=verbose
+                              clean=clean, eis_map=eis_map, verbose=verbose, $
+                              eis_dx=eis_dx
 
 
 ;+
@@ -34,6 +35,12 @@ FUNCTION aia_make_eis_raster, files, windata, no_sat=no_sat, offset=offset, $
 ;              the AIA synthetic raster. If not specified, then the
 ;              routine creates a map using the central wavelength of the
 ;              windata structure.
+;     Eis_Dx:  A scalar specifying the spatial separation of EIS exposures
+;              in the X direction. This changes the values of
+;              windata.solar_x and should be used if there seems to be
+;              relative stretch between EIS and AIA in the X direction. To
+;              see what the default is, print
+;              windata.solar_x[1]-windata.solar_x[0].
 ;	
 ; KEYWORD PARAMETERS:
 ;     NO_SAT:  Removes saturated images from the AIA sequence.
@@ -60,13 +67,13 @@ FUNCTION aia_make_eis_raster, files, windata, no_sat=no_sat, offset=offset, $
 ;       AIA image
 ;     Ver.3, 01-Aug-2025, Peter Young
 ;       Major change such that the alignment is now done on the sub-pixel
-;       level by making use of inter_map.
+;       level by making use of inter_map; added eis_dx= optional input.
 ;-
 
 
 IF n_params() LT 2 THEN BEGIN
   print,'Use:  IDL> map=aia_make_eis_raster( files, windata [, /no_sat, offset= '
-  print,'                   /clean, eis_map=, /verbose )'
+  print,'                   /clean, eis_map=, /verbose, eis_dx= )'
   return,-1
 ENDIF 
 
@@ -94,7 +101,12 @@ IF windata.hdr.slit_ind EQ 0 THEN swid=1.0 ELSE swid=2.0
 ; Get EIS coordinates.
 ;
 xy=eis_aia_offsets(windata.hdr.date_obs)
-eis_x=windata.solar_x+xy[0]+offset[0]
+IF n_elements(eis_dx) NE 0 THEN BEGIN
+  x0=findgen(nx)*eis_dx
+  eis_x=x0+windata.solar_x[0]+xy[0]+offset[0]
+ENDIF ELSE BEGIN 
+  eis_x=windata.solar_x+xy[0]+offset[0]
+ENDELSE 
 eis_y=windata.solar_y+xy[1]+offset[1]
 
 s=size(map[0].data,/dim)
@@ -195,13 +207,14 @@ ENDFOR
 ;
 ; Create a copy of eis_map and apply the y-offset to it.
 ;
-eis_map2=eis_map
-eis_map2.yc=eis_map2.yc+offset[1]
+aia_eis_map.yc=aia_eis_map.yc-offset[1]
+;eis_map2=eis_map
+;eis_map2.yc=eis_map2.yc+offset[1]
 
 ;
 ; Interpolate the AIA map onto the coordinate grid of the corrected EIS map.
 ;
-new_map=inter_map(aia_eis_map,eis_map2)
+new_map=inter_map(aia_eis_map,eis_map)
 
 return,new_map
 
