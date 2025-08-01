@@ -58,6 +58,9 @@ FUNCTION aia_make_eis_raster, files, windata, no_sat=no_sat, offset=offset, $
 ;     Ver.2, 25-Jul-2025, Peter Young
 ;       Fixed bug when the top of the EIS slit extends beyond the top of the
 ;       AIA image
+;     Ver.3, 01-Aug-2025, Peter Young
+;       Major change such that the alignment is now done on the sub-pixel
+;       level by making use of inter_map.
 ;-
 
 
@@ -97,15 +100,6 @@ eis_y=windata.solar_y+xy[1]+offset[1]
 s=size(map[0].data,/dim)
 
 ;
-; img is used to help create the synthetic EIS image. The x-size
-; is set to the EIS map x-size. For the y-direction, we initially
-; set this to the size of the AIA image in arcsec. For example,
-; if the AIA image is 200 pixels, then we get the y-size as 120
-; pixels (200*0.6).
-;
-img=fltarr(nx,round(s[1]*map[0].dx))
-
-;
 ; I convolve the AIA image with a 2D gaussian of FWHM 3"
 ; 
 nk=13
@@ -125,48 +119,6 @@ FOR i=0,n_maps-1 DO BEGIN
 ENDFOR 
 
 ;
-; I go through each EIS exposure and do the following procedure.
-;  - get AIA maps that lie within start/end times of exposure.
-;  - convolve each AIA map with the kernel
-;  - rebin the AIA map to match EIS pixel sizes
-;  - find AIA data column nearest to EIS slit position and add
-;    to output image
-;  - if multiple maps for an exposure, average the data columns
-;
-FOR i=0,nx-1 DO BEGIN
-  k=where(aia_tai GE start_tai[i]-2. AND aia_tai LE END_tai[i]+2.,nk)
-  IF nk NE 0 THEN BEGIN
-    count=0
-    FOR j=0,nk-1 DO BEGIN
-     ;
-     ; Rebin the AIA map to the EIS y-pixel size (1 arcsec)
-     ;
-      s=size(map[k[j]].data,/dim)
-      r_ny=round(s[1]*map[k[j]].dy)
-      rmap=rebin_map(map[k[j]],s[0],r_ny)
-
-     ;
-     ; Find data column(s) that matches EIS location
-     ;
-      get_map_coord,rmap,xp,yp
-      ix=where(xp[*,0] GE eis_x[i]-swid/2.-0.5 AND xp[*,0] LE eis_x[i]+swid/2.+0.5,nix)
-      IF nix EQ 0 THEN CONTINUE
-      getmin=min(abs(eis_x[i]-xp),imin)
-
-     ;
-     ; Add column to output image.
-     ;
-      img[i,*]=img[i,*]+total(rmap.data[ix,*],1)
-      count=count+nix
-
-    ENDFOR
-    IF count NE 0 THEN img[i,*]=img[i,*]/float(count)
-    IF keyword_set(verbose) THEN print,format='(" Exposure: ",i3," -- maps: ",i2," -- columns: ",i3)',i,nk,count
-    count=0
-  ENDIF 
-ENDFOR 
-
-;
 ; Create the EIS map with eis_make_image if it wasn't input.
 ;
 IF n_tags(eis_map) EQ 0 THEN BEGIN
@@ -175,30 +127,114 @@ IF n_tags(eis_map) EQ 0 THEN BEGIN
 ENDIF
 
 ;
+; This map has the dimensions of the EIS raster in the x direction,
+; and the dimensions of the AIA image in the y-direction. It will
+; contain the synthetic AIA raster, which will later by interpolated
+; onto the EIS y-coordinates.
+;
+aia_eis_map=make_map(fltarr(nx,s[1]), $
+                     xc=eis_map.xc, $
+                     yc=map[n_maps/2].yc, $
+                     dx=eis_map.dx, $
+                     dy=map[n_maps/2].dy, $
+                     id='AIA synthetic raster', $
+                     time=eis_map.time, $
+                     xunits=map[n_maps/2].xunits, $
+                     yunits=map[n_maps/2].yunits, $
+                     dur=map[n_maps/2].dur, $
+                     roll_angle=map[n_maps/2].roll_angle, $
+                     roll_center=map[n_maps/2].roll_center, $
+                     l0=map[n_maps/2].l0, $
+                     b0=map[n_maps/2].b0, $
+                     rsun=map[n_maps/2].rsun)
+
+
+;
+; The following loops over the EIS exposures (i) and populates the
+; columns of aia_eis_map.
+; Typically there will be more than one AIA image that contributes
+; to the exposure, and also more than column within the image.
+; These are all averaged.
+;
+FOR i=0,nx-1 DO BEGIN
+  ;
+  ; Find AIA images that match the EIS exposure duration. I extend
+  ; the duration by 2s in each direction to help ensure that I get
+  ; some images.
+  ;
+  k=where(aia_tai GE start_tai[i]-2. AND aia_tai LE END_tai[i]+2.,nk)
+  ;
+  IF nk NE 0 THEN BEGIN
+    count=0
+    FOR j=0,nk-1 DO BEGIN
+      ;
+      ; Extract data columns from the AIA images that fall within
+      ; the EIS slit width. I extend the width by 0.5 arcsec in both
+      ; directions to help with the averaging.
+      ;
+      get_map_coord,map[k[j]],xp,yp
+      ix=where(xp[*,0] GE eis_x[i]-swid/2.-0.5 AND xp[*,0] LE eis_x[i]+swid/2.+0.5,nix)
+      IF nix EQ 0 THEN CONTINUE
+      getmin=min(abs(eis_x[i]-xp),imin)
+     ;
+     ; Average over the columns and add to the output map.
+     ;
+      aia_eis_map.data[i,*]=aia_eis_map.data[i,*]+total(map[k[j]].data[ix,*],1)
+      count=count+nix
+    ENDFOR
+    ;
+    ; Normalize by the number of images used.
+    ;
+    IF count NE 0 THEN aia_eis_map.data[i,*]=aia_eis_map.data[i,*]/float(count)
+    ;
+    IF keyword_set(verbose) THEN print,format='(" Exposure: ",i3," -- maps: ",i2," -- columns: ",i3)',i,nk,count
+    count=0
+  ENDIF 
+ENDFOR 
+
+;
+; Create a copy of eis_map and apply the y-offset to it.
+;
+eis_map2=eis_map
+eis_map2.yc=eis_map2.yc+offset[1]
+
+;
+; Interpolate the AIA map onto the coordinate grid of the corrected EIS map.
+;
+new_map=inter_map(aia_eis_map,eis_map2)
+
+return,new_map
+
+
+;
 ; Get the 1D array of y-coordinates and add the OFFSET value.
 ; Note that yp is the same for all of the AIA maps, so I just
 ; take the most recent value (from the earlier i-loop).
 ; iy is the AIA pixel that corresponds to the bottom pixel of
 ; the EIS map.
 ;
-get_map_coord,eis_map,exp,eyp
-eyp=eyp+offset[1]
-getmin=min(abs(eyp[0]-reform(yp[0,*])),iy)
+;; get_map_coord,eis_map,exp,eyp
+;; eyp=eyp+offset[1]
+;; getmin=min(abs(eyp[0]-reform(yp[0,*])),iy)
+;; print,getmin,iy
+
+;; eis_map2=eis_map
+;; eis_map2.yc=eis_map2
 
 ;
 ; Copy the EIS map into the final output map, and then replace the
 ; data with the synthetic EIS image from AIA.
 ;
-outmap=eis_map
-s=size(img,/dim)
-IF s[1]-iy GE ny THEN BEGIN
-  outmap.data=img[*,iy:iy+ny-1]
-ENDIF ELSE BEGIN
-  outmap.data[*,0:s[1]-iy-1]=img[*,iy:*]
-ENDELSE
+;; outmap=eis_map
+;; s=size(img,/dim)
+;; IF s[1]-iy GE ny THEN BEGIN
+;;   outmap.data=img[*,iy:iy+ny-1]
+;; ENDIF ELSE BEGIN
+;;   outmap.data[*,0:s[1]-iy-1]=img[*,iy:*]
+;; ENDELSE
 
-outmap.id='AIA raster'
+;; outmap.id='AIA raster'
 
-return,outmap
+;return,outmap
 
 END

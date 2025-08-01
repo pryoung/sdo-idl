@@ -121,6 +121,8 @@ function sdo2map, filename, clean=clean, nonorm=nonorm, no_sat=no_sat, $
 ;     Ver.16, 25-Jul-2025, Peter Young
 ;        Modified how saturated images are dealt with, and introduced
 ;        nsatpix= input.
+;     Ver.17, 01-Aug-2025, Peter Young
+;        Redefine n after images have been selected with trange.
 ;-
 
 
@@ -207,6 +209,7 @@ IF n_elements(trange) NE 0 THEN BEGIN
   k=where(tobs_tai GE tr0_tai AND tobs_tai LE tr1_tai,nk)
   index=index[k]
   list=list[k]
+  n=nk
 ENDIF
 
 
